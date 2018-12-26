@@ -200,6 +200,24 @@ def load_mnist():
     y_test = to_categorical(y_test.astype('float32'))
     return (x_train, y_train), (x_test, y_test)
 
+def load_svhn():
+    from scipy import io
+    train_file = 'train_32x32.mat'
+    test_file = 'test_32x32.mat'
+    matdata_train = io.loadmat(train_file, squeeze_me=True)
+    matdata_test = io.loadmat(test_file, squeeze_me=True)
+    x_train = matdata_train['X']
+    y_train = matdata_train['y']
+    y_train = np.where(y_train == 10, 0, y_train)
+    x_test = matdata_test['X']
+    y_test = matdata_test['y']
+    y_test = np.where(y_test == 10, 0, y_test)
+    x_train = x_train.transpose(3, 0, 1, 2).astype('float32') / 255.
+    x_test = x_test.transpose(3, 0, 1, 2).astype('float32') / 255.
+    y_train = to_categorical(y_train.astype('float32'))
+    y_test = to_categorical(y_test.astype('float32'))
+    return (x_train, y_train), (x_test, y_test)
+
 
 if __name__ == "__main__":
     import os
@@ -237,7 +255,7 @@ if __name__ == "__main__":
         os.makedirs(args.save_dir)
 
     # load data
-    (x_train, y_train), (x_test, y_test) = load_mnist()
+    (x_train, y_train), (x_test, y_test) = load_svhn()
 
     # define model
     model, eval_model, manipulate_model = CapsNet(input_shape=x_train.shape[1:],
