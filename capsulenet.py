@@ -17,7 +17,7 @@ Author: Xifeng Guo, E-mail: `guoxifeng1990@163.com`, Github: `https://github.com
 """
 
 import numpy as np
-from keras import layers, models, optimizers
+from keras import layers, models, optimizers, callbacks
 from keras import backend as K
 from keras.utils import to_categorical
 import matplotlib.pyplot as plt
@@ -147,7 +147,74 @@ def train(model, data, args):
     return model
 
 
+def retrain(model, data, args):
+    """
+    Training a CapsuleNet
+    :param model: the CapsuleNet model
+    :param data: a tuple containing training and testing data, like `((x_train, y_train), (x_test, y_test))`
+    :param args: arguments
+    :return: The trained model
+    """
+    # unpacking the data
+    (x_train, y_train), (x_test, y_test) = data
+
+    capsule_weights = model.layers[5].get_weights()[0]
+    capsule_mask = np.abs(capsule_weights) < 0.000001
+    # callbacks
+    log = callbacks.CSVLogger(args.save_dir + '/log.csv')
+    tb = callbacks.TensorBoard(log_dir=args.save_dir + '/tensorboard-logs',
+                               batch_size=args.batch_size, histogram_freq=int(args.debug))
+    checkpoint = callbacks.ModelCheckpoint(args.save_dir + '/weights-{epoch:02d}.h5', monitor='val_capsnet_acc',
+                                           save_best_only=True, save_weights_only=True, verbose=1)
+    lr_decay = callbacks.LearningRateScheduler(schedule=lambda epoch: args.lr * (args.lr_decay ** epoch))
+
+    pruning = Pruning(capsule_mask)
+    # compile the model
+    model.compile(optimizer=optimizers.Adam(lr=args.lr),
+                  loss=[margin_loss, 'mse'],
+                  loss_weights=[1., args.lam_recon],
+                  metrics={'capsnet': 'accuracy'})
+
+    """
+    # Training without data augmentation:
+    model.fit([x_train, y_train], [y_train, x_train], batch_size=args.batch_size, epochs=args.epochs,
+              validation_data=[[x_test, y_test], [y_test, x_test]], callbacks=[log, tb, checkpoint, lr_decay])
+    """
+
+    # Begin: Training with data augmentation ---------------------------------------------------------------------#
+    def train_generator(x, y, batch_size, shift_fraction=0.):
+        train_datagen = ImageDataGenerator(width_shift_range=shift_fraction,
+                                           height_shift_range=shift_fraction)  # shift up to 2 pixel for MNIST
+        generator = train_datagen.flow(x, y, batch_size=batch_size)
+        while 1:
+            x_batch, y_batch = generator.next()
+            yield ([x_batch, y_batch], [y_batch, x_batch])
+
+    # Training with data augmentation. If shift_fraction=0., also no augmentation.
+    model.fit_generator(generator=train_generator(x_train, y_train, args.batch_size, args.shift_fraction),
+                        steps_per_epoch=int(y_train.shape[0] / args.batch_size),
+                        epochs=args.epochs,
+                        validation_data=[[x_test, y_test], [y_test, x_test]],
+                        callbacks=[log, tb, checkpoint, lr_decay, pruning])
+    # End: Training with data augmentation -----------------------------------------------------------------------#
+
+    model.save_weights(args.save_dir + '/trained_model.h5')
+    print('Trained model saved to \'%s/trained_model.h5\'' % args.save_dir)
+
+    from utils import plot_log
+    plot_log(args.save_dir + '/log.csv', show=True)
+
+    return model
+
+class Pruning(callbacks.Callback):
+    def __init__(self, mask):
+        super().__init__()
+        self.mask = mask
+    def on_batch_end(self, batch, logs=None):
+        self.model.layers[5].get_weights()[0][self.mask] = 0 
+
 def test(model, data, args):
+    """
     x_test, y_test = data
     y_pred, x_recon = model.predict(x_test, batch_size=100)
     print('-'*30 + 'Begin: test' + '-'*30)
@@ -161,7 +228,16 @@ def test(model, data, args):
     print('-' * 30 + 'End: test' + '-' * 30)
     plt.imshow(plt.imread(args.save_dir + "/real_and_recon.png"))
     plt.show()
+    """
+    show_model_sparsity(model)
 
+def show_model_sparsity(model):
+    layers = model.layers
+    for i, l in enumerate(layers):
+        print(i+1, l)
+    capsule_w = model.layers[5].get_weights()[0]
+    print(capsule_w.shape)
+    print(capsule_w[0, 1, :, :])
 
 def manipulate_latent(model, data, args):
     print('-'*30 + 'Begin: manipulate' + '-'*30)
@@ -244,6 +320,8 @@ if __name__ == "__main__":
     parser.add_argument('--save_dir', default='./result')
     parser.add_argument('-t', '--testing', action='store_true',
                         help="Test the trained model on testing dataset")
+    parser.add_argument('--retraining', action='store_true',
+                        help="Retrain and make weights sparse")
     parser.add_argument('--digit', default=5, type=int,
                         help="Digit to manipulate")
     parser.add_argument('-w', '--weights', default=None,
@@ -267,7 +345,12 @@ if __name__ == "__main__":
     if args.weights is not None:  # init the model weights with provided one
         model.load_weights(args.weights)
     if not args.testing:
-        train(model=model, data=((x_train, y_train), (x_test, y_test)), args=args)
+        if not args.retraining:
+            train(model=model, data=((x_train, y_train), (x_test, y_test)), args=args)
+        else:
+            if args.weights is None:
+                print('No weights are provided. Will test using random initialized weights.')
+            retrain(model=model, data=((x_train, y_train), (x_test, y_test)), args=args)
     else:  # as long as weights are given, will run testing
         if args.weights is None:
             print('No weights are provided. Will test using random initialized weights.')

@@ -31,5 +31,7 @@ if __name__=='__main__':
     #plot_log('result_mnist')
     #plot_log('result_mnist_l1')
     #plot_log('result_fashion_mnist')
-    plot_log('result_fashion_mnist_l1')
+    #plot_log('result_fashion_mnist_l1')
+    plot_log('result_svhn')
+    plot_log('result_svhn_l1')
 
