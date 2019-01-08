@@ -211,7 +211,10 @@ class Pruning(callbacks.Callback):
         super().__init__()
         self.mask = mask
     def on_batch_end(self, batch, logs=None):
-        self.model.layers[5].get_weights()[0][self.mask] = 0 
+        capsule_weights = self.model.layers[5].get_weights()[0] 
+        capsule_weights[self.mask] = 0
+        capsule_weights = [capsule_weights]
+        self.model.layers[5].set_weights(capsule_weights)
 
 def test(model, data, args):
     """
