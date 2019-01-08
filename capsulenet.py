@@ -269,6 +269,16 @@ def manipulate_latent(model, data, args):
 
 def load_mnist():
     # the data, shuffled and split between train and test sets
+    (x_train, y_train), (x_test, y_test) = mnist.load_data()
+
+    x_train = x_train.reshape(-1, 28, 28, 1).astype('float32') / 255.
+    x_test = x_test.reshape(-1, 28, 28, 1).astype('float32') / 255.
+    y_train = to_categorical(y_train.astype('float32'))
+    y_test = to_categorical(y_test.astype('float32'))
+    return (x_train, y_train), (x_test, y_test)
+
+def load_fashion_mnist():
+    # the data, shuffled and split between train and test sets
     import keras
     fashion_mnist = keras.datasets.fashion_mnist
     (x_train, y_train), (x_test, y_test) = fashion_mnist.load_data()
@@ -305,7 +315,7 @@ if __name__ == "__main__":
     from keras import callbacks
 
     # setting the hyper parameters
-    parser = argparse.ArgumentParser(description="Capsule Network on MNIST.")
+    parser = argparse.ArgumentParser(description="Capsule Network.")
     parser.add_argument('--epochs', default=50, type=int)
     parser.add_argument('--batch_size', default=100, type=int)
     parser.add_argument('--lr', default=0.001, type=float,
@@ -314,6 +324,8 @@ if __name__ == "__main__":
                         help="The value multiplied by lr at each epoch. Set a larger value for larger epochs")
     parser.add_argument('--lam_recon', default=0.392, type=float,
                         help="The coefficient for the loss of decoder")
+    parser.add_argument('--dataset', default=0, type=int,
+                        help='0=mnist, 1=fashion_mnist, 2=SVHN')
     parser.add_argument('-r', '--routings', default=3, type=int,
                         help="Number of iterations used in routing algorithm. should > 0")
     parser.add_argument('--shift_fraction', default=0.1, type=float,
@@ -336,7 +348,12 @@ if __name__ == "__main__":
         os.makedirs(args.save_dir)
 
     # load data
-    (x_train, y_train), (x_test, y_test) = load_svhn()
+    if args.dataset == 0:
+        (x_train, y_train), (x_test, y_test) = load_mnist()
+    elif args.dataset == 1:
+        (x_train, y_train), (x_test, y_test) = load_fashion_mnist()
+    elif args.dataset == 2:
+        (x_train, y_train), (x_test, y_test) = load_svhn()
 
     # define model
     model, eval_model, manipulate_model = CapsNet(input_shape=x_train.shape[1:],
