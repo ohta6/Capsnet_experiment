@@ -17,18 +17,21 @@ Author: Xifeng Guo, E-mail: `guoxifeng1990@163.com`, Github: `https://github.com
 """
 
 import numpy as np
-from keras import layers, models, optimizers, callbacks
+from keras import layers, models, optimizers, callbacks, regularizers
 from keras import backend as K
 from keras.utils import to_categorical
 import matplotlib.pyplot as plt
-from utils import combine_images
+from utils import combine_images, affine
 from PIL import Image
 from capsulelayers import CapsuleLayer, PrimaryCap, Length, Mask
+from sklearn.model_selection import train_test_split
+from functools import reduce
+from operator import mul
 
 K.set_image_data_format('channels_last')
 
 
-def CapsNet(input_shape, n_class, routings):
+def CapsNet(input_shape, n_class, routings, l1=0):
     """
     A Capsule Network on MNIST.
     :param input_shape: data shape, 3d, [width, height, channels]
@@ -40,14 +43,29 @@ def CapsNet(input_shape, n_class, routings):
     x = layers.Input(shape=input_shape)
 
     # Layer 1: Just a conventional Conv2D layer
-    conv1 = layers.Conv2D(filters=256, kernel_size=9, strides=1, padding='valid', activation='relu', name='conv1')(x)
+    conv1 = layers.Conv2D(filters=256,
+                          kernel_size=9,
+                          strides=1,
+                          padding='valid',
+                          activation='relu',
+                          name='conv1',
+                          kernel_regularizer=regularizers.l1(l=l1))(x)
 
     # Layer 2: Conv2D layer with `squash` activation, then reshape to [None, num_capsule, dim_capsule]
-    primarycaps = PrimaryCap(conv1, dim_capsule=8, n_channels=32, kernel_size=9, strides=2, padding='valid')
+    primarycaps = PrimaryCap(conv1,
+                             dim_capsule=8,
+                             n_channels=32,
+                             kernel_size=9,
+                             strides=2,
+                             padding='valid',
+                             l1=l1)
 
     # Layer 3: Capsule layer. Routing algorithm works here.
-    digitcaps = CapsuleLayer(num_capsule=n_class, dim_capsule=16, routings=routings,
-                             name='digitcaps')(primarycaps)
+    digitcaps = CapsuleLayer(num_capsule=n_class,
+                             dim_capsule=16,
+                             routings=routings,
+                             name='digitcaps',
+                             l1=l1)(primarycaps)
 
     # Layer 4: This is an auxiliary layer to replace each capsule with its length. Just to match the true label's shape.
     # If using tensorflow, this will not be necessary. :)
@@ -60,8 +78,10 @@ def CapsNet(input_shape, n_class, routings):
 
     # Shared Decoder model in training and prediction
     decoder = models.Sequential(name='decoder')
-    decoder.add(layers.Dense(512, activation='relu', input_dim=16*n_class))
-    decoder.add(layers.Dense(1024, activation='relu'))
+    decoder.add(layers.Dense(512, activation='relu', input_dim=16*n_class,
+                            kernel_regularizer=regularizers.l1(l=l1)))
+    decoder.add(layers.Dense(1024, activation='relu',
+                            kernel_regularizer=regularizers.l1(l=l1)))
     decoder.add(layers.Dense(np.prod(input_shape), activation='sigmoid'))
     decoder.add(layers.Reshape(target_shape=input_shape, name='out_recon'))
 
@@ -99,7 +119,8 @@ def train(model, data, args):
     :return: The trained model
     """
     # unpacking the data
-    (x_train, y_train), (x_test, y_test) = data
+    (x_train, y_train) = data
+    x_train, x_valid, y_train, y_valid = train_test_split(x_train, y_train, test_size=0.15)
 
     # callbacks
     log = callbacks.CSVLogger(args.save_dir + '/log.csv')
@@ -108,6 +129,11 @@ def train(model, data, args):
     checkpoint = callbacks.ModelCheckpoint(args.save_dir + '/weights-{epoch:02d}.h5', monitor='val_capsnet_acc',
                                            save_best_only=True, save_weights_only=True, verbose=1)
     lr_decay = callbacks.LearningRateScheduler(schedule=lambda epoch: args.lr * (args.lr_decay ** epoch))
+
+    if args.retrain:
+        capsule_weights = model.layers[5].get_weights()[0]
+        capsule_mask = np.abs(capsule_weights) < 0.000001
+        pruning = Pruning(capsule_mask)
 
     # compile the model
     model.compile(optimizer=optimizers.Adam(lr=args.lr),
@@ -131,71 +157,22 @@ def train(model, data, args):
             yield ([x_batch, y_batch], [y_batch, x_batch])
 
     # Training with data augmentation. If shift_fraction=0., also no augmentation.
-    model.fit_generator(generator=train_generator(x_train, y_train, args.batch_size, args.shift_fraction),
-                        steps_per_epoch=int(y_train.shape[0] / args.batch_size),
-                        epochs=args.epochs,
-                        validation_data=[[x_test, y_test], [y_test, x_test]],
-                        callbacks=[log, tb, checkpoint, lr_decay])
-    # End: Training with data augmentation -----------------------------------------------------------------------#
-
-    model.save_weights(args.save_dir + '/trained_model.h5')
-    print('Trained model saved to \'%s/trained_model.h5\'' % args.save_dir)
-
-    from utils import plot_log
-    plot_log(args.save_dir + '/log.csv', show=True)
-
-    return model
-
-
-def retrain(model, data, args):
-    """
-    Training a CapsuleNet
-    :param model: the CapsuleNet model
-    :param data: a tuple containing training and testing data, like `((x_train, y_train), (x_test, y_test))`
-    :param args: arguments
-    :return: The trained model
-    """
-    # unpacking the data
-    (x_train, y_train), (x_test, y_test) = data
-
-    capsule_weights = model.layers[5].get_weights()[0]
-    capsule_mask = np.abs(capsule_weights) < 0.000001
-    # callbacks
-    log = callbacks.CSVLogger(args.save_dir + '/log.csv')
-    tb = callbacks.TensorBoard(log_dir=args.save_dir + '/tensorboard-logs',
-                               batch_size=args.batch_size, histogram_freq=int(args.debug))
-    checkpoint = callbacks.ModelCheckpoint(args.save_dir + '/weights-{epoch:02d}.h5', monitor='val_capsnet_acc',
-                                           save_best_only=True, save_weights_only=True, verbose=1)
-    lr_decay = callbacks.LearningRateScheduler(schedule=lambda epoch: args.lr * (args.lr_decay ** epoch))
-
-    pruning = Pruning(capsule_mask)
-    # compile the model
-    model.compile(optimizer=optimizers.Adam(lr=args.lr),
-                  loss=[margin_loss, 'mse'],
-                  loss_weights=[1., args.lam_recon],
-                  metrics={'capsnet': 'accuracy'})
-
-    """
-    # Training without data augmentation:
-    model.fit([x_train, y_train], [y_train, x_train], batch_size=args.batch_size, epochs=args.epochs,
-              validation_data=[[x_test, y_test], [y_test, x_test]], callbacks=[log, tb, checkpoint, lr_decay])
-    """
-
-    # Begin: Training with data augmentation ---------------------------------------------------------------------#
-    def train_generator(x, y, batch_size, shift_fraction=0.):
-        train_datagen = ImageDataGenerator(width_shift_range=shift_fraction,
-                                           height_shift_range=shift_fraction)  # shift up to 2 pixel for MNIST
-        generator = train_datagen.flow(x, y, batch_size=batch_size)
-        while 1:
-            x_batch, y_batch = generator.next()
-            yield ([x_batch, y_batch], [y_batch, x_batch])
-
-    # Training with data augmentation. If shift_fraction=0., also no augmentation.
-    model.fit_generator(generator=train_generator(x_train, y_train, args.batch_size, args.shift_fraction),
-                        steps_per_epoch=int(y_train.shape[0] / args.batch_size),
-                        epochs=args.epochs,
-                        validation_data=[[x_test, y_test], [y_test, x_test]],
-                        callbacks=[log, tb, checkpoint, lr_decay, pruning])
+    if args.retrain:
+        model.fit_generator(generator=train_generator(x_train, y_train,
+                                                      args.batch_size,
+                                                      args.shift_fraction),
+                            steps_per_epoch=int(y_train.shape[0] / args.batch_size),
+                            epochs=args.epochs,
+                            validation_data=[[x_valid, y_valid], [y_valid, x_valid]],
+                            callbacks=[log, tb, checkpoint, lr_decay, pruning])
+    else:
+        model.fit_generator(generator=train_generator(x_train, y_train,
+                                                      args.batch_size,
+                                                      args.shift_fraction),
+                            steps_per_epoch=int(y_train.shape[0] / args.batch_size),
+                            epochs=args.epochs,
+                            validation_data=[[x_valid, y_valid], [y_valid, x_valid]],
+                            callbacks=[log, tb, checkpoint, lr_decay])
     # End: Training with data augmentation -----------------------------------------------------------------------#
 
     model.save_weights(args.save_dir + '/trained_model.h5')
@@ -217,30 +194,33 @@ class Pruning(callbacks.Callback):
         self.model.layers[5].set_weights(capsule_weights)
 
 def test(model, data, args):
-    """
     x_test, y_test = data
-    y_pred, x_recon = model.predict(x_test, batch_size=100)
-    print('-'*30 + 'Begin: test' + '-'*30)
-    print('Test acc:', np.sum(np.argmax(y_pred, 1) == np.argmax(y_test, 1))/y_test.shape[0])
+    #print(x_test.shape)
+    x_deform_test = np.array([affine(x) for x in x_test])
+    save_pred_and_recon(x_test, y_test, model, args)
+    save_pred_and_recon(x_deform_test, y_test, model, args)
 
+
+def save_pred_and_recon(x_test, y_test, model, args):
+    y_pred, x_recon = model.predict(x_test, batch_size=100)
+    acc = np.sum(np.argmax(y_pred, 1) == np.argmax(y_test, 1))/y_test.shape[0]
+    print('Test acc:', acc)
     img = combine_images(np.concatenate([x_test[:50],x_recon[:50]]))
     image = img * 255
-    Image.fromarray(image.astype(np.uint8)).save(args.save_dir + "/real_and_recon.png")
-    print()
     print('Reconstructed images are saved to %s/real_and_recon.png' % args.save_dir)
     print('-' * 30 + 'End: test' + '-' * 30)
     plt.imshow(plt.imread(args.save_dir + "/real_and_recon.png"))
-    plt.show()
-    """
-    show_model_sparsity(model)
+    sparcity = show_model_sparsity(model)
+    with open(args.save_dir + "/test_acc.txt", "a") as f:
+        f.write('Test acc:' + str(acc) + '\n')
+        f.write('model sparcity:' + str(sparcity) + '\n')
 
 def show_model_sparsity(model):
     layers = model.layers
-    for i, l in enumerate(layers):
-        print(i+1, l)
     capsule_w = model.layers[5].get_weights()[0]
-    print(capsule_w.shape)
-    print(capsule_w[0, 1, :, :])
+    total_param = reduce(mul, capsule_w.shape)
+    zero_param = np.sum(capsule_w==0.0)
+    return zero_param/total_param
 
 def manipulate_latent(model, data, args):
     print('-'*30 + 'Begin: manipulate' + '-'*30)
@@ -269,7 +249,8 @@ def manipulate_latent(model, data, args):
 
 def load_mnist():
     # the data, shuffled and split between train and test sets
-    (x_train, y_train), (x_test, y_test) = mnist.load_data()
+    import keras
+    (x_train, y_train), (x_test, y_test) = keras.datasets.mnist.load_data()
 
     x_train = x_train.reshape(-1, 28, 28, 1).astype('float32') / 255.
     x_test = x_test.reshape(-1, 28, 28, 1).astype('float32') / 255.
@@ -335,7 +316,9 @@ if __name__ == "__main__":
     parser.add_argument('--save_dir', default='./result')
     parser.add_argument('-t', '--testing', action='store_true',
                         help="Test the trained model on testing dataset")
-    parser.add_argument('--retraining', action='store_true',
+    parser.add_argument('--l1', default=0.0, type=float,
+                        help="coeff l1 regularization")
+    parser.add_argument('--retrain', action='store_true',
                         help="Retrain and make weights sparse")
     parser.add_argument('--digit', default=5, type=int,
                         help="Digit to manipulate")
@@ -358,19 +341,15 @@ if __name__ == "__main__":
     # define model
     model, eval_model, manipulate_model = CapsNet(input_shape=x_train.shape[1:],
                                                   n_class=len(np.unique(np.argmax(y_train, 1))),
-                                                  routings=args.routings)
+                                                  routings=args.routings,
+                                                  l1=args.l1)
     model.summary()
 
     # train or test
     if args.weights is not None:  # init the model weights with provided one
         model.load_weights(args.weights)
     if not args.testing:
-        if not args.retraining:
-            train(model=model, data=((x_train, y_train), (x_test, y_test)), args=args)
-        else:
-            if args.weights is None:
-                print('No weights are provided. Will test using random initialized weights.')
-            retrain(model=model, data=((x_train, y_train), (x_test, y_test)), args=args)
+        train(model=model, data=(x_train, y_train), args=args)
     else:  # as long as weights are given, will run testing
         if args.weights is None:
             print('No weights are provided. Will test using random initialized weights.')

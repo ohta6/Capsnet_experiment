@@ -1,4 +1,5 @@
 import numpy as np
+import cv2
 from matplotlib import pyplot as plt
 import csv
 import math
@@ -49,8 +50,41 @@ def combine_images(generated_images, height=None, width=None):
             img[:, :, 0]
     return image
 
+def affine(img):
+    rotation_deg = 40 * np.random.rand() - 20
+    shear_x = 0.4 * np.random.rand() - 0.2
+    shear_y = 0.4 * np.random.rand() - 0.2
+    move_x = 2 * np.random.rand() - 1
+    move_y = 2 * np.random.rand() - 1
+
+    if len(img.shape) == 2:
+        rows, cols = img.shape
+    else:
+        rows, cols, ch = img.shape
+
+    rotate_M = cv2.getRotationMatrix2D((cols/2,rows/2),rotation_deg,0.75)
+    shear_M = np.float32([
+            [1, shear_x, 0],
+            [shear_y, 1, 0]
+        ])
+    move_M = np.float32([
+            [1, 0, move_x],
+            [0, 1, move_y]
+        ])
+    img = cv2.warpAffine(img,rotate_M,(cols,rows))
+    img = cv2.warpAffine(img,shear_M,(cols,rows))
+    res = cv2.warpAffine(img,move_M,(cols,rows))
+    #res = cv2.resize(img,(rows,cols), fx=2.0,fy=1.5)
+    if len(img.shape) == 2:
+        res = np.reshape(res, (rows, cols, 1))
+    return res
+    
 if __name__=="__main__":
-    plot_log('result/log.csv')
+    img = cv2.imread('gori.jpg', 0)
+    print(img.shape)
+    img = affine(img)
+    cv2.imwrite('gori_aff.jpg',img)
+    #plot_log('result/log.csv')
 
 
 

@@ -97,12 +97,14 @@ class CapsuleLayer(layers.Layer):
     """
     def __init__(self, num_capsule, dim_capsule, routings=3,
                  kernel_initializer='glorot_uniform',
+                 l1=0.0,
                  **kwargs):
         super(CapsuleLayer, self).__init__(**kwargs)
         self.num_capsule = num_capsule
         self.dim_capsule = dim_capsule
         self.routings = routings
         self.kernel_initializer = initializers.get(kernel_initializer)
+        self.l1=l1
 
     def build(self, input_shape):
         assert len(input_shape) >= 3, "The input Tensor should have shape=[None, input_num_capsule, input_dim_capsule]"
@@ -113,7 +115,7 @@ class CapsuleLayer(layers.Layer):
         self.W = self.add_weight(shape=[self.num_capsule, self.input_num_capsule,
                                         self.dim_capsule, self.input_dim_capsule],
                                  initializer=self.kernel_initializer,
-                                 regularizer=regularizers.l1(0.0001),
+                                 regularizer=regularizers.l1(self.l1),
                                  name='W')
 
         self.built = True
@@ -176,7 +178,7 @@ class CapsuleLayer(layers.Layer):
         return dict(list(base_config.items()) + list(config.items()))
 
 
-def PrimaryCap(inputs, dim_capsule, n_channels, kernel_size, strides, padding):
+def PrimaryCap(inputs, dim_capsule, n_channels, kernel_size, strides, padding, l1=0.0):
     """
     Apply Conv2D `n_channels` times and concatenate all capsules
     :param inputs: 4D tensor, shape=[None, width, height, channels]
@@ -184,7 +186,11 @@ def PrimaryCap(inputs, dim_capsule, n_channels, kernel_size, strides, padding):
     :param n_channels: the number of types of capsules
     :return: output tensor, shape=[None, num_capsule, dim_capsule]
     """
-    output = layers.Conv2D(filters=dim_capsule*n_channels, kernel_size=kernel_size, strides=strides, padding=padding,
+    output = layers.Conv2D(filters=dim_capsule*n_channels,
+                           kernel_size=kernel_size,
+                           strides=strides,
+                           padding=padding,
+                           kernel_regularizer=regularizers.l1(l1),
                            name='primarycap_conv2d')(inputs)
     outputs = layers.Reshape(target_shape=[-1, dim_capsule], name='primarycap_reshape')(output)
     return layers.Lambda(squash, name='primarycap_squash')(outputs)
