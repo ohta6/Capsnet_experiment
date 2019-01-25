@@ -4,6 +4,9 @@ from matplotlib import pyplot as plt
 import csv
 import math
 import pandas
+from PIL import Image
+from functools import reduce
+from operator import mul
 
 def plot_log(filename, show=True):
 
@@ -62,7 +65,7 @@ def affine(img):
     else:
         rows, cols, ch = img.shape
 
-    rotate_M = cv2.getRotationMatrix2D((cols/2,rows/2),rotation_deg,0.75)
+    rotate_M = cv2.getRotationMatrix2D((cols/2,rows/2),rotation_deg,1.2)
     shear_M = np.float32([
             [1, shear_x, 0],
             [shear_y, 1, 0]
@@ -79,6 +82,52 @@ def affine(img):
         res = np.reshape(res, (rows, cols, 1))
     return res
     
+def save_pred_and_recon(x_test, y_test, model, args, png_name='/real_and_recon.png'):
+    y_pred, x_recon = model.predict(x_test, batch_size=100)
+    acc = np.sum(np.argmax(y_pred, 1) == np.argmax(y_test, 1))/y_test.shape[0]
+    print('Test acc:', acc)
+    img = combine_images(np.concatenate([x_test[:50],x_recon[:50]]))
+    image = img * 255
+    print('Reconstructed images are saved to %s%s' % (args.save_dir, png_name))
+    print('-' * 30 + 'End: test' + '-' * 30)
+    Image.fromarray(image.astype(np.uint8)).save(args.save_dir + png_name)
+    #plt.imshow(plt.imread(args.save_dir + "/real_and_recon.png"))
+    sparcity = show_model_sparsity(model)
+    with open(args.save_dir + "/test_acc.txt", "a") as f:
+        f.write('Test acc:' + str(acc) + '\n')
+        f.write('model sparcity:' + str(sparcity) + '\n')
+
+def show_model_sparsity(model):
+    layers = model.layers
+    capsule_w = model.layers[5].get_weights()[0]
+    total_param = reduce(mul, capsule_w.shape)
+    zero_param = np.sum(capsule_w==0.0)
+    return zero_param/total_param
+
+def manipulate_latent(model, data, args):
+    print('-'*30 + 'Begin: manipulate' + '-'*30)
+    x_test, y_test = data
+    index = np.argmax(y_test, 1) == args.digit
+    number = np.random.randint(low=0, high=sum(index) - 1)
+    x, y = x_test[index][number], y_test[index][number]
+    x, y = np.expand_dims(x, 0), np.expand_dims(y, 0)
+    noise = np.zeros([1, 10, 16])
+    x_recons = []
+    for r in [-0.25, -0.2, -0.15, -0.1, -0.05, 0, 0.05, 0.1, 0.15, 0.2, 0.25]:
+        for dim in range(16):
+            tmp = np.copy(noise)
+            tmp[:,:,dim] = r
+            x_recon = model.predict([x, y, tmp])
+            x_recons.append(x_recon)
+
+    x_recons = np.concatenate(x_recons)
+
+    img = combine_images(x_recons, height=11, width=16)
+    image = img*255
+    Image.fromarray(image.astype(np.uint8)).save(args.save_dir + '/manipulate-%d.png' % args.digit)
+    print('manipulated result saved to %s/manipulate-%d.png' % (args.save_dir, args.digit))
+    print('-' * 30 + 'End: manipulate' + '-' * 30)
+
 if __name__=="__main__":
     img = cv2.imread('gori.jpg', 0)
     print(img.shape)
