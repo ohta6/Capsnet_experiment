@@ -21,7 +21,7 @@ from keras import layers, models, optimizers, callbacks, regularizers
 from keras import backend as K
 from keras.utils import to_categorical
 import matplotlib.pyplot as plt
-from utils import combine_images, affine, manipulate_latent, save_pred_and_recon
+from utils import combine_images, affine, manipulate_latent, save_pred_and_recon, show_model_sparsity
 from PIL import Image
 from capsulelayers import CapsuleLayer, PrimaryCap, Length, Mask
 from sklearn.model_selection import train_test_split
@@ -242,6 +242,15 @@ def load_svhn():
     y_test = to_categorical(y_test.astype('float32'))
     return (x_train, y_train), (x_test, y_test)
 
+def check_sparsity(model):
+    from functools import reduce
+    from operator import mul
+    capsule_w = model.layers[5].get_weights()[0] 
+    total_param = reduce(mul, capsule_w.shape)
+    zero_param = np.sum(capsule_w==0.0)
+    print(np.count_nonzero(capsule_w))
+    print(total_param)
+    print(zero_param)
 
 if __name__ == "__main__":
     import os
@@ -261,6 +270,8 @@ if __name__ == "__main__":
                         help="The coefficient for the loss of decoder")
     parser.add_argument('--dataset', default=0, type=int,
                         help='0=mnist, 1=fashion_mnist, 2=SVHN')
+    parser.add_argument('--train_num', default=10000, type=int,
+                        help='how many train data use')
     parser.add_argument('-r', '--routings', default=3, type=int,
                         help="Number of iterations used in routing algorithm. should > 0")
     parser.add_argument('--shift_fraction', default=0.1, type=float,
@@ -280,6 +291,8 @@ if __name__ == "__main__":
                         help="Digit to manipulate")
     parser.add_argument('-w', '--weights', default=None,
                         help="The path of the saved weights. Should be specified when testing")
+    parser.add_argument('--sparsity', action='store_true',
+                        help="check sparsity of weights")
     args = parser.parse_args()
     print(args)
 
@@ -294,6 +307,8 @@ if __name__ == "__main__":
     elif args.dataset == 2:
         (x_train, y_train), (x_test, y_test) = load_svhn()
 
+    x_train = x_train[:args.train_num]
+    y_train = y_train[:args.train_num]
     # define model
     model, eval_model, manipulate_model = CapsNet(input_shape=x_train.shape[1:],
                                                   n_class=len(np.unique(np.argmax(y_train, 1))),
@@ -302,12 +317,20 @@ if __name__ == "__main__":
     model.summary()
 
     # train or test
-    if args.weights is not None:  # init the model weights with provided one
-        model.load_weights(args.weights)
-    if not args.testing:
-        train(model=model, data=(x_train, y_train), args=args)
-    else:  # as long as weights are given, will run testing
-        if args.weights is None:
-            print('No weights are provided. Will test using random initialized weights.')
-        manipulate_latent(manipulate_model, (x_test, y_test), args)
-        test(model=eval_model, data=(x_test, y_test), args=args)
+    if not args.sparsity:
+        if args.weights is not None:  # init the model weights with provided one
+            model.load_weights(args.weights)
+        if not args.testing:
+            train(model=model, data=(x_train, y_train), args=args)
+        else:  # as long as weights are given, will run testing
+            if args.weights is None:
+                print('No weights are provided. Will test using random initialized weights.')
+            manipulate_latent(manipulate_model, (x_test, y_test), args)
+            test(model=eval_model, data=(x_test, y_test), args=args)
+    else:
+        if args.weights:
+            model.load_weights(args.weights)
+            #check_sparsity(model)
+            print(show_model_sparsity(model))
+        else:
+            print('No weights are provided.')

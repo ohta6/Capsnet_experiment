@@ -100,8 +100,14 @@ def save_pred_and_recon(x_test, y_test, model, args, png_name='/real_and_recon.p
 def show_model_sparsity(model):
     layers = model.layers
     capsule_w = model.layers[5].get_weights()[0]
+    capsule_w = capsule_w.reshape([-1, 16, 8])
     total_param = reduce(mul, capsule_w.shape)
     zero_param = np.sum(capsule_w==0.0)
+    count = 0
+    for w in capsule_w:
+        if (np.sum(w==0.0)/(16*8)) == 1.0:
+            count += 1
+    print(count/capsule_w.shape[0])
     return zero_param/total_param
 
 def manipulate_latent(model, data, args):
