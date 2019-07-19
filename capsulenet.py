@@ -21,7 +21,7 @@ from keras import layers, models, optimizers, callbacks, regularizers
 from keras import backend as K
 from keras.utils import to_categorical
 import matplotlib.pyplot as plt
-from utils import combine_images, affine, manipulate_latent, save_pred_and_recon, show_model_sparsity
+from utils import combine_images, affine, manipulate_latent, save_pred_and_recon, show_model_sparsity, stop_watch, save_for_gif
 from PIL import Image
 from capsulelayers import CapsuleLayer, PrimaryCap, Length, Mask
 from sklearn.model_selection import train_test_split
@@ -127,7 +127,7 @@ def train(model, data, args):
     tb = callbacks.TensorBoard(log_dir=args.save_dir + '/tensorboard-logs',
                                batch_size=args.batch_size, histogram_freq=int(args.debug))
     checkpoint = callbacks.ModelCheckpoint(args.save_dir + '/weights-{epoch:02d}.h5', monitor='val_capsnet_acc',
-                                           save_best_only=True, save_weights_only=True, verbose=1)
+                                           save_best_only=False, save_weights_only=True, verbose=1)
     lr_decay = callbacks.LearningRateScheduler(schedule=lambda epoch: args.lr * (args.lr_decay ** epoch))
 
     if args.retrain:
@@ -150,12 +150,21 @@ def train(model, data, args):
     # Begin: Training with data augmentation ---------------------------------------------------------------------#
     def train_generator(x, y, batch_size, shift_fraction=0.):
         train_datagen = ImageDataGenerator(width_shift_range=shift_fraction,
-                                           height_shift_range=shift_fraction)  # shift up to 2 pixel for MNIST
+                                           height_shift_range=shift_fraction,
+                                           samplewise_center=True,
+                                           samplewise_std_normalization=True)  # shift up to 2 pixel for MNIST
         generator = train_datagen.flow(x, y, batch_size=batch_size)
         while 1:
             x_batch, y_batch = generator.next()
             yield ([x_batch, y_batch], [y_batch, x_batch])
 
+    def valid_generator(x, y, batch_size):
+        valid_datagen = ImageDataGenerator(samplewise_center=True,
+                                           samplewise_std_normalization=True)  # shift up to 2 pixel for MNIST
+        generator = valid_datagen.flow(x, y, batch_size=batch_size)
+        while 1:
+            x_batch, y_batch = generator.next()
+            yield ([x_batch, y_batch], [y_batch, x_batch])
     # Training with data augmentation. If shift_fraction=0., also no augmentation.
     if args.retrain:
         model.fit_generator(generator=train_generator(x_train, y_train,
@@ -163,7 +172,8 @@ def train(model, data, args):
                                                       args.shift_fraction),
                             steps_per_epoch=int(y_train.shape[0] / args.batch_size),
                             epochs=args.epochs,
-                            validation_data=[[x_valid, y_valid], [y_valid, x_valid]],
+                            validation_data=valid_generator(x_valid, y_valid, 100),
+                            validation_steps=75,
                             callbacks=[log, tb, checkpoint, lr_decay, pruning])
     else:
         model.fit_generator(generator=train_generator(x_train, y_train,
@@ -171,7 +181,8 @@ def train(model, data, args):
                                                       args.shift_fraction),
                             steps_per_epoch=int(y_train.shape[0] / args.batch_size),
                             epochs=args.epochs,
-                            validation_data=[[x_valid, y_valid], [y_valid, x_valid]],
+                            validation_data=valid_generator(x_valid, y_valid, 100),
+                            validation_steps=75,
                             callbacks=[log, tb, checkpoint, lr_decay])
     # End: Training with data augmentation -----------------------------------------------------------------------#
 
@@ -242,15 +253,16 @@ def load_svhn():
     y_test = to_categorical(y_test.astype('float32'))
     return (x_train, y_train), (x_test, y_test)
 
-def check_sparsity(model):
-    from functools import reduce
-    from operator import mul
-    capsule_w = model.layers[5].get_weights()[0] 
-    total_param = reduce(mul, capsule_w.shape)
-    zero_param = np.sum(capsule_w==0.0)
-    print(np.count_nonzero(capsule_w))
-    print(total_param)
-    print(zero_param)
+def load_cifar10():
+    # the data, shuffled and split between train and test sets
+    import keras
+    (x_train, y_train), (x_test, y_test) = keras.datasets.cifar10.load_data()
+
+    x_train = x_train.reshape(-1, 32, 32, 3).astype('float32') / 255.
+    x_test = x_test.reshape(-1, 32, 32, 3).astype('float32') / 255.
+    y_train = to_categorical(y_train.astype('float32'))
+    y_test = to_categorical(y_test.astype('float32'))
+    return (x_train, y_train), (x_test, y_test)
 
 if __name__ == "__main__":
     import os
@@ -269,8 +281,8 @@ if __name__ == "__main__":
     parser.add_argument('--lam_recon', default=0.392, type=float,
                         help="The coefficient for the loss of decoder")
     parser.add_argument('--dataset', default=0, type=int,
-                        help='0=mnist, 1=fashion_mnist, 2=SVHN')
-    parser.add_argument('--train_num', default=10000, type=int,
+                        help='0=mnist, 1=fashion_mnist, 2=SVHN, 3=cifar10')
+    parser.add_argument('--train_num', default=50000, type=int,
                         help='how many train data use')
     parser.add_argument('-r', '--routings', default=3, type=int,
                         help="Number of iterations used in routing algorithm. should > 0")
@@ -285,14 +297,12 @@ if __name__ == "__main__":
                         help="coeff l1 regularization")
     parser.add_argument('--retrain', action='store_true',
                         help="Retrain and make weights sparse")
-    parser.add_argument('--retrain_coeff', default=0.000001, type=float,
+    parser.add_argument('--retrain_coeff', default=0.0001, type=float,
                         help="閾値")
     parser.add_argument('--digit', default=5, type=int,
                         help="Digit to manipulate")
     parser.add_argument('-w', '--weights', default=None,
                         help="The path of the saved weights. Should be specified when testing")
-    parser.add_argument('--sparsity', action='store_true',
-                        help="check sparsity of weights")
     args = parser.parse_args()
     print(args)
 
@@ -306,6 +316,8 @@ if __name__ == "__main__":
         (x_train, y_train), (x_test, y_test) = load_fashion_mnist()
     elif args.dataset == 2:
         (x_train, y_train), (x_test, y_test) = load_svhn()
+    elif args.dataset == 3:
+        (x_train, y_train), (x_test, y_test) = load_cifar10()
 
     x_train = x_train[:args.train_num]
     y_train = y_train[:args.train_num]
@@ -317,20 +329,14 @@ if __name__ == "__main__":
     model.summary()
 
     # train or test
-    if not args.sparsity:
-        if args.weights is not None:  # init the model weights with provided one
-            model.load_weights(args.weights)
-        if not args.testing:
-            train(model=model, data=(x_train, y_train), args=args)
-        else:  # as long as weights are given, will run testing
-            if args.weights is None:
-                print('No weights are provided. Will test using random initialized weights.')
-            manipulate_latent(manipulate_model, (x_test, y_test), args)
-            test(model=eval_model, data=(x_test, y_test), args=args)
-    else:
-        if args.weights:
-            model.load_weights(args.weights)
-            #check_sparsity(model)
-            print(show_model_sparsity(model))
-        else:
-            print('No weights are provided.')
+    if args.weights is not None:  # init the model weights with provided one
+        model.load_weights(args.weights)
+    if not args.testing:
+        train(model=model, data=(x_train, y_train), args=args)
+    else:  # as long as weights are given, will run testing
+        if args.weights is None:
+            print('No weights are provided. Will test using random initialized weights.')
+        #manipulate_latent(manipulate_model, (x_test, y_test), args)
+        save_for_gif(manipulate_model, (x_test, y_test), args)
+        #test(model=eval_model, data=(x_test, y_test), args=args)
+        print(show_model_sparsity(eval_model))

@@ -1,5 +1,6 @@
 import numpy as np
 import cv2
+import os
 from matplotlib import pyplot as plt
 import csv
 import math
@@ -7,6 +8,19 @@ import pandas
 from PIL import Image
 from functools import reduce
 from operator import mul
+
+from keras.preprocessing.image import ImageDataGenerator
+from functools import wraps
+import time
+def stop_watch(func) :
+    @wraps(func)
+    def wrapper(*args, **kargs) :
+        start = time.time()
+        result = func(*args,**kargs)
+        elapsed_time =  time.time() - start
+        print("{}は{}秒かかりました".format(func.__name__, elapsed_time))
+        return result
+    return wrapper
 
 def plot_log(filename, show=True):
 
@@ -81,9 +95,25 @@ def affine(img):
     if len(img.shape) == 2:
         res = np.reshape(res, (rows, cols, 1))
     return res
-    
+
+def test_generator(x, batch_size):
+    test_datagen = ImageDataGenerator()
+    """
+    test_datagen = ImageDataGenerator(samplewise_center=True,
+                                      samplewise_std_normalization=True)
+    """
+    generator = test_datagen.flow(x, batch_size=batch_size, shuffle=False)
+    return generator
+
+@stop_watch
+def pred(model, generator, batchsize=100):
+    y_pred, x_recon = model.predict_generator(generator, steps=100)
+    return y_pred, x_recon
+
 def save_pred_and_recon(x_test, y_test, model, args, png_name='/real_and_recon.png'):
-    y_pred, x_recon = model.predict(x_test, batch_size=100)
+    #y_pred, x_recon = model.predict(x_test, batch_size=100)
+    generator = test_generator(x_test, batch_size=100)
+    y_pred, x_recon = pred(model, generator)
     acc = np.sum(np.argmax(y_pred, 1) == np.argmax(y_test, 1))/y_test.shape[0]
     print('Test acc:', acc)
     img = combine_images(np.concatenate([x_test[:50],x_recon[:50]]))
@@ -133,6 +163,22 @@ def manipulate_latent(model, data, args):
     Image.fromarray(image.astype(np.uint8)).save(args.save_dir + '/manipulate-%d.png' % args.digit)
     print('manipulated result saved to %s/manipulate-%d.png' % (args.save_dir, args.digit))
     print('-' * 30 + 'End: manipulate' + '-' * 30)
+
+def save_for_gif(model, data, args):
+    x_test, y_test = data
+    index = np.argmax(y_test, 1) == args.digit
+    number = np.random.randint(low=0, high=sum(index) - 1)
+    x, y = x_test[index][number], y_test[index][number]
+    x, y = np.expand_dims(x, 0), np.expand_dims(y, 0)
+    noise = np.zeros([1, 10, 16])
+    for dim in range(16):
+        os.mkdir(args.save_dir+'/digit{}_dim{}'.format(args.digit, dim))
+        for i,r in enumerate(range(-25, 26)):
+            tmp = np.copy(noise)
+            tmp[:,:,dim] = r/100
+            x_recon = model.predict([x, y, tmp])
+            img = np.uint8(x_recon[0]*255)
+            cv2.imwrite(args.save_dir+'/digit{}_dim{}/{:0=10}.png'.format(args.digit, dim, i), img)
 
 if __name__=="__main__":
     img = cv2.imread('gori.jpg', 0)

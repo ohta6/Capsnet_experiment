@@ -40,8 +40,8 @@ def plot_log2(foldernames):
     plt.xlabel('epoch')
     plt.ylabel('accuracy')
     plt.legend()
-    plt.ylim(0.8, 1.0)
-    plt.savefig('acc.png')
+    #plt.ylim(0.8, 1.0)
+    plt.savefig('cifar_acc.png')
     plt.clf()
 if __name__=='__main__':
     """
@@ -54,7 +54,8 @@ if __name__=='__main__':
     plot_log('result_svhn')
     plot_log('result_svhn_l1')
     plot_log('result_svhn_retrain')
-    """
     plot_log2(['result_mnist', 'result_mnist_l1', 'result_mnist_retrain'])
     plot_log2(['result_fashion_mnist', 'result_fashion_mnist_l1', 'result_fashion_mnist_retrain'])
     plot_log2(['result_svhn', 'result_svhn_l1', 'result_svhn_retrain'])
+    """
+    plot_log2(['result_cifar10', 'result_cifar10_l1', 'result_cifar10_retrain'])
