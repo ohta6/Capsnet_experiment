@@ -10,7 +10,8 @@ from sklearn.model_selection import train_test_split
 from functools import reduce
 from operator import mul
 
-from capsulenet import CapsNet, load_mnist, load_fashion_mnist, load_svhn
+from data_loaders import load_mnist, load_fashion_mnist, load_svhn, load_cifar10
+from capsulenet import CapsNet
 K.set_image_data_format('channels_last')
 
 if __name__ == "__main__":
