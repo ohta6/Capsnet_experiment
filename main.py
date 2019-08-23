@@ -1,7 +1,9 @@
 # encode:UTF-8
 import numpy as np
-from capsulenet import CapsNet, train, test, CapsNet_for_big
-from utils import get_args, save_for_gif
+from capsulenet import CapsNet, CapsNet_for_big
+from train import train
+from test import test
+from utils import get_args
 from data_loaders import load_mnist, load_fashion_mnist, load_svhn, load_cifar10, load_food101
 
 if __name__ == "__main__":
@@ -27,10 +29,16 @@ if __name__ == "__main__":
     x_train = x_train[:args.train_num]
     y_train = y_train[:args.train_num]
     # define model
-    model, eval_model, manipulate_model = CapsNet_for_big(input_shape=x_train.shape[1:],
-                                                  n_class=len(np.unique(np.argmax(y_train, 1))),
-                                                  routings=args.routings,
-                                                  l1=args.l1)
+    if args.dataset != 4:
+        model, eval_model, manipulate_model = CapsNet(input_shape=x_train.shape[1:],
+                                                      n_class=len(np.unique(np.argmax(y_train, 1))),
+                                                      routings=args.routings,
+                                                      l1=args.l1)
+    else:
+        model, eval_model, manipulate_model = CapsNet_for_big(input_shape=x_train.shape[1:],
+                                                      n_class=len(np.unique(np.argmax(y_train, 1))),
+                                                      routings=args.routings,
+                                                      l1=args.l1)
     model.summary()
 
     # train or test
@@ -42,6 +50,5 @@ if __name__ == "__main__":
         if args.weights is None:
             print('No weights are provided. Will test using random initialized weights.')
         #manipulate_latent(manipulate_model, (x_test, y_test), args)
-        save_for_gif(manipulate_model, (x_test, y_test), args)
-        #test(model=eval_model, data=(x_test, y_test), args=args)
-        print(show_model_sparsity(eval_model))
+        #save_for_gif(manipulate_model, (x_test, y_test), args)
+        test(model=eval_model, data=(x_test, y_test), args=args)
