@@ -117,7 +117,7 @@ def CapsNet_for_big(input_shape, n_class, routings, l1=0):
                           name='conv1',
                           kernel_regularizer=regularizers.l1(l=l1))(x)
     # extra Conv2D layer to reduce parameters
-    conv2 = layers.Conv2D(filters=256,
+    conv2 = layers.Conv2D(filters=512,
                           kernel_size=9,
                           strides=2,
                           padding='valid',
@@ -127,7 +127,7 @@ def CapsNet_for_big(input_shape, n_class, routings, l1=0):
 
     # Layer 2: Conv2D layer with `squash` activation, then reshape to [None, num_capsule, dim_capsule]
     primarycaps = PrimaryCap(conv2,
-                             dim_capsule=8,
+                             dim_capsule=16,
                              n_channels=32,
                              kernel_size=9,
                              strides=2,
@@ -136,7 +136,7 @@ def CapsNet_for_big(input_shape, n_class, routings, l1=0):
 
     # Layer 3: Capsule layer. Routing algorithm works here.
     digitcaps = CapsuleLayer(num_capsule=n_class,
-                             dim_capsule=16,
+                             dim_capsule=25,
                              routings=routings,
                              name='digitcaps',
                              l1=l1)(primarycaps)
@@ -152,19 +152,39 @@ def CapsNet_for_big(input_shape, n_class, routings, l1=0):
 
     # Shared Decoder model in training and prediction
     decoder = models.Sequential(name='decoder')
+    """
     decoder.add(layers.Dense(512, activation='relu', input_dim=16*n_class,
                             kernel_regularizer=regularizers.l1(l=l1)))
     decoder.add(layers.Dense(1024, activation='relu',
                             kernel_regularizer=regularizers.l1(l=l1)))
     decoder.add(layers.Dense(np.prod(input_shape), activation='sigmoid'))
     decoder.add(layers.Reshape(target_shape=input_shape, name='out_recon'))
+    """
+    # deconv decoder
+    decoder.add(layers.Dense(75, activation='relu', input_dim=25*n_class,
+                            kernel_regularizer=regularizers.l1(l=l1)))
+    decoder.add(layers.Reshape(target_shape=(5,5,3)))
+    #decoder.add(layers.Conv2DTranspose(filters=64, kernel_size=2,
+    #                                   strides=1, activation='relu'))
+    # (5,5,3)->(11,11,64)
+    decoder.add(layers.Conv2DTranspose(filters=64, kernel_size=3,
+                                       strides=2, activation='relu'))
+    # (11,11,64)->(23,23,128)
+    decoder.add(layers.Conv2DTranspose(filters=128, kernel_size=3,
+                                       strides=2, activation='relu'))
+    # (23,23,128)->(47,47,128)
+    decoder.add(layers.Conv2DTranspose(filters=128, kernel_size=3,
+                                       strides=2, activation='relu'))
+    # (23,23,128)->(47,47,128)
+    decoder.add(layers.Conv2DTranspose(filters=3, kernel_size=4,
+                                       strides=2, activation='tanh', name='out_recon'))
 
     # Models for training and evaluation (prediction)
     train_model = models.Model([x, y], [out_caps, decoder(masked_by_y)])
     eval_model = models.Model(x, [out_caps, decoder(masked)])
 
     # manipulate model
-    noise = layers.Input(shape=(n_class, 16))
+    noise = layers.Input(shape=(n_class, 25))
     noised_digitcaps = layers.Add()([digitcaps, noise])
     masked_noised_y = Mask()([noised_digitcaps, y])
     manipulate_model = models.Model([x, y, noise], decoder(masked_noised_y))

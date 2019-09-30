@@ -2,9 +2,17 @@
 import numpy as np
 from capsulenet import CapsNet, CapsNet_for_big
 from train import train
-from test import test
+from test import test, test_all
 from utils import get_args
 from data_loaders import load_mnist, load_fashion_mnist, load_svhn, load_cifar10, load_food101
+from tensorflow.python import debug as tf_debug
+from keras import backend as K
+"""
+sess = K.get_session()
+sess = tf_debug.LocalCLIDebugWrapperSession(sess)
+K.set_session(sess)
+"""
+
 
 if __name__ == "__main__":
     import os
@@ -48,7 +56,10 @@ if __name__ == "__main__":
         train(model=model, data=(x_train, y_train), args=args)
     else:  # as long as weights are given, will run testing
         if args.weights is None:
-            print('No weights are provided. Will test using random initialized weights.')
+            #print('No weights are provided. Will test using random initialized weights.')
+            test_all(eval_model, (x_test, y_test), args.dataset)
         #manipulate_latent(manipulate_model, (x_test, y_test), args)
         #save_for_gif(manipulate_model, (x_test, y_test), args)
-        test(model=eval_model, data=(x_test, y_test), args=args)
+        #test(model=eval_model, data=(x_test, y_test), args=args)
+
+

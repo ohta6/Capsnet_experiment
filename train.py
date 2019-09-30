@@ -4,7 +4,7 @@ from keras.preprocessing.image import ImageDataGenerator
 from keras import backend as K
 import matplotlib.pyplot as plt
 from utils import affine, get_args
-from capsulenet import CapsNet, CapsNet_for_big, margin_loss
+from capsulenet import CapsNet, CapsNet_for_big, margin_loss, Pruning
 from PIL import Image
 from sklearn.model_selection import train_test_split
 from functools import reduce
@@ -22,14 +22,14 @@ def train(model, data, args):
     """
     # unpacking the data
     (x_train, y_train) = data
-    x_train, x_valid, y_train, y_valid = train_test_split(x_train, y_train, test_size=0.15)
+    x_train, x_valid, y_train, y_valid = train_test_split(x_train, y_train, test_size=0.1)
 
     # callbacks
     log = callbacks.CSVLogger(args.save_dir + '/log.csv')
     tb = callbacks.TensorBoard(log_dir=args.save_dir + '/tensorboard-logs',
                                batch_size=args.batch_size, histogram_freq=int(args.debug))
     checkpoint = callbacks.ModelCheckpoint(args.save_dir + '/weights-{epoch:02d}.h5', monitor='val_capsnet_acc',
-                                           save_best_only=False, save_weights_only=True, verbose=1)
+                                           save_best_only=True, save_weights_only=True, verbose=1)
     lr_decay = callbacks.LearningRateScheduler(schedule=lambda epoch: args.lr * (args.lr_decay ** epoch))
 
     if args.retrain:
@@ -68,14 +68,20 @@ def train(model, data, args):
             x_batch, y_batch = generator.next()
             yield ([x_batch, y_batch], [y_batch, x_batch])
     # Training with data augmentation. If shift_fraction=0., also no augmentation.
+    if args.dataset == 4:
+        valid_batch = 75
+        valid_step = 10
+    else:
+        valid_batch = 100
+        valid_step = 75
     if args.retrain:
         model.fit_generator(generator=train_generator(x_train, y_train,
                                                       args.batch_size,
                                                       args.shift_fraction),
                             steps_per_epoch=int(y_train.shape[0] / args.batch_size),
                             epochs=args.epochs,
-                            validation_data=valid_generator(x_valid, y_valid, 100),
-                            validation_steps=75,
+                            validation_data=valid_generator(x_valid, y_valid, valid_batch),
+                            validation_steps=valid_step,
                             callbacks=[log, tb, checkpoint, lr_decay, pruning])
     else:
         model.fit_generator(generator=train_generator(x_train, y_train,
@@ -83,15 +89,12 @@ def train(model, data, args):
                                                       args.shift_fraction),
                             steps_per_epoch=int(y_train.shape[0] / args.batch_size),
                             epochs=args.epochs,
-                            validation_data=valid_generator(x_valid, y_valid, 100),
-                            validation_steps=75,
+                            validation_data=valid_generator(x_valid, y_valid, valid_batch),
+                            validation_steps=valid_step,
                             callbacks=[log, tb, checkpoint, lr_decay])
     # End: Training with data augmentation -----------------------------------------------------------------------#
 
     model.save_weights(args.save_dir + '/trained_model.h5')
     print('Trained model saved to \'%s/trained_model.h5\'' % args.save_dir)
-
-    from utils import plot_log
-    plot_log(args.save_dir + '/log.csv', show=True)
 
     return model
